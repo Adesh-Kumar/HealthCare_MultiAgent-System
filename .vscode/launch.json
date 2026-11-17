@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000"
+            ],
+            "cwd": "${workspaceFolder}\\python-ai",
+            "envFile": "${workspaceFolder}\\python-ai\\.env",
+            "env": {
+                "DOTNET_API_BASE_URL": "http://127.0.0.1:5185"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

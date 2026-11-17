@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ShipDesk | Customer operations demo</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">Ship<span>Desk</span></div>
+      <div class="tag">CUSTOMER OPERATIONS · INTERACTIVE DEMO</div>
+    </header>
+
+    <main class="wrap">
+      <section class="intro">
+        <h1>Shipment support workbench</h1>
+        <p>
+          Submit a customer email, inspect the evidence-backed response, then
+          approve or escalate it.
+        </p>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h2>1 · Customer message</h2>
+          <div class="row">
+            <div>
+              <label>API token</label>
+              <input id="token" value="local-dev-token">
+            </div>
+            <div>
+              <label>Tenant</label>
+              <input id="tenant" value="demo">
+            </div>
+          </div>
+
+          <label>Subject</label>
+          <input id="subject" value="Where is the rest of my shipment?">
+
+          <label>Email body <span class="small">(editable demo payload)</span></label>
+          <textarea id="body">Hello, I received only part of order ORD-9001. Can you tell me where the remaining items are and when they will arrive? Thanks.</textarea>
+
+          <div class="samples">
+            <button
+              class="chip"
+              data-s="Tracking update"
+              data-b="Please check tracking for order ORD-9001. The tracking page has not updated."
+            >
+              Tracking
+            </button>
+            <button
+              class="chip"
+              data-s="Late delivery"
+              data-b="Order ORD-9001 is late. When will it arrive?"
+            >
+              Late delivery
+            </button>
+            <button
+              class="chip"
+              data-s="Delivered but not received"
+              data-b="Order ORD-9001 says delivered, but I cannot find the package."
+            >
+              Not received
+            </button>
+            <button
+              class="chip"
+              data-s="Change delivery address"
+              data-b="Can I change the delivery address for order ORD-9001?"
+            >
+              Address change
+            </button>
+            <button
+              class="chip"
+              data-s="Damaged item"
+              data-b="An item in order ORD-9001 arrived damaged. What should I do?"
+            >
+              Damaged item
+            </button>
+            <button
+              class="chip"
+              data-s="Return request"
+              data-b="I want to return an item from order ORD-9001. What is the process?"
+            >
+              Return
+            </button>
+          </div>
+
+          <button class="btn" id="submit">Submit email · run workflow</button>
+          <div class="footer">
+            Demo order: ORD-9001 · 50 units ordered, 30 delivered. Email sending
+            is simulated by the local .NET outbox.
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>2 · Workflow and operator review</h2>
+          <div id="status" class="status">Waiting for a customer message.</div>
+          <div id="details" class="hidden">
+            <div class="box">
+              <h3>Classified request</h3>
+              <div id="classification"></div>
+            </div>
+            <div class="box">
+              <h3>Relevant endpoint evidence</h3>
+              <div id="evidence"></div>
+            </div>
+            <label>Draft response (editable)</label>
+            <textarea id="draft" style="min-height: 135px"></textarea>
+            <div class="actions">
+              <button class="btn" id="approve">Approve and send demo email</button>
+              <button class="btn danger" id="reject">Reject / escalate</button>
+              <button class="btn alt" id="retry">Retry workflow</button>
+            </div>
+            <div id="sendResult" class="box hidden"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      let requestId = null;
+      const $ = (id) => document.getElementById(id);
+      const status = (msg, kind = "") => {
+        $("status").textContent = msg;
+        $("status").className = "status " + kind;
+      };
+
+      document.querySelectorAll(".chip").forEach((button) => {
+        button.onclick = () => {
+          $("subject").value = button.dataset.s;
+          $("body").value = button.dataset.b;
+        };
+      });
+
+      async function api(path, opts = {}) {
+        const res = await fetch(path, {
+          ...opts,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + $("token").value,
+            "X-Tenant-Id": $("tenant").value,
+            ...opts.headers,
+          },
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw Error(data.detail || data.error || res.statusText);
+        }
+
+        return data;
+      }
+
+    $("submit").onclick = async () => {
+        try {
+          $("submit").disabled = true;
+          status(
+            "Running intent extraction, shipment lookup, policy search, and response review…",
+          );
+          const response = await api("/api/v1/requests", {
+            method: "POST",
+            body: JSON.stringify({
+              channel: "email",
+              subject: $("subject").value,
+              body: $("body").value,
+            }),
+          });
+          requestId = response.request_id;
+          await loadRequest();
+        } catch (error) {
+          status("Request failed: " + error.message, "warn");
+        } finally {
+          $("submit").disabled = false;
+        }
+      };
+
+
+      async function loadRequest() {
+        const [request, evidence, draft] = await Promise.all([
+          api(`/api/v1/requests/${requestId}`),
+          api(`/api/v1/requests/${requestId}/evidence`),
+          api(`/api/v1/requests/${requestId}/draft`),
+        ]);
+
+        $("status").textContent =
+          `Request ${requestId} · ${request.status.replaceAll("_", " ")}`;
+        $("status").className =
+          "status " + (request.status === "awaiting_approval" ? "good" : "warn");
+        $("classification").textContent = JSON.stringify(
+          {
+            intent: evidence.request?.intent,
+            confidence: evidence.request?.confidence,
+            questions: evidence.request?.questions,
+            resolution: evidence.resolution,
+          },
+          null,
+          2,
+        );
+        $("evidence").textContent = JSON.stringify(
+          {
+            shipment: evidence.order,
+            policies: evidence.policies,
+            lookupErrors: [
+              evidence.shipment_lookup_error,
+              evidence.policy_lookup_error,
+            ].filter(Boolean),
+          },
+          null,
+          2,
+        );
+        $("draft").value = draft?.body || "";
+        $("details").classList.remove("hidden");
+        $("approve").disabled = request.status !== "awaiting_approval";
+        $("reject").disabled = request.status !== "awaiting_approval";
+        $("sendResult").classList.add("hidden");
+      }
+
+  
+      $("approve").onclick = async () => {
+        try {
+          const response = await api(
+            `/api/v1/requests/${requestId}/approve`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                approved: true,
+                edited_body: $("draft").value,
+                idempotency_key: crypto.randomUUID(),
+              }),
+            },
+          );
+          await loadRequest();
+          $("sendResult").textContent =
+            "Demo email accepted by local outbox:\n" +
+            JSON.stringify(response.send_result, null, 2);
+          $("sendResult").classList.remove("hidden");
+        } catch (error) {
+          status("Approval failed: " + error.message, "warn");
+        }
+      };
+
+      $("reject").onclick = async () => {
+        try {
+          await api(`/api/v1/requests/${requestId}/reject`, { method: "POST" });
+          await loadRequest();
+        } catch (error) {
+          status(error.message, "warn");
+        }
+      };
+
+      $("retry").onclick = async () => {
+        try {
+          await api(`/api/v1/requests/${requestId}/retry`, { method: "POST" });
+          await loadRequest();
+        } catch (error) {
+          status(error.message, "warn");
+        }
+      };
+    </script>
+  </body>
+</html>
